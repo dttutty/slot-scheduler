@@ -1,5 +1,7 @@
 # slot-scheduler
 
+Chinese README: [README.zh-CN.md](README.zh-CN.md)
+
 `slot-scheduler` is a small, repo-friendly experiment launcher for mixed compute fleets.
 
 It is designed for the annoying real-world setup where some jobs should go through Slurm, some should go through plain SSH, and some can run locally. Instead of hard-coding all of that inside one project script, this repo keeps the resource inventory, backend logic, and queueing loop separate from your experiment code.
@@ -113,6 +115,10 @@ defaults:
   password_env: LEAP2_PASSWORD
   poll_seconds: 30
 
+host_policies:
+  - host: gpu2-001
+    max_active_fraction: 0.5
+
 slots:
   - name: gpu1-001
     backend: slurm
@@ -134,6 +140,15 @@ slots:
     run_root: /var/tmp/sqp17/slot-scheduler/runs
     tags: [ssh, spillover]
 ```
+
+`host_policies` are optional. If a host has no policy, `slot-scheduler` will greedily use all of its slots. If a policy is present, it caps how many slots from that host can be occupied at the same time.
+
+Supported host policy fields:
+
+- `max_active_slots`: hard cap for simultaneous slots on the host
+- `max_active_fraction`: cap as a fraction of the host's declared slots
+
+For example, a 2-GPU host with `max_active_fraction: 0.5` will only run one slot at a time.
 
 SSH aliases from `~/.ssh/config` work too. That is often the cleanest way to use per-host keys:
 
