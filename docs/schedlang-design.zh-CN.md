@@ -40,7 +40,7 @@ runtime 继续保持简单；语言负责把“我想怎么调度”说清楚。
 | 语义层 | 含义 | 例子 |
 | --- | --- | --- |
 | resource capability | 资源本身拥有什么 | `backend = ssh`、`provider = "runpod"`、`gpu_count = 8`、`gpu_mem_gb = 80`、`tags = ["shared", "a100"]` |
-| task requirement | 任务必须满足什么 | `gpu_count >= 4`、`backend in ["ssh", "slurm"]`、`provider in ["runpod", "vast"]`、`host_tags contains "a100"` |
+| task requirement | 任务必须满足什么 | `gpu_mem_gb >= 24`、`backend in ["ssh", "slurm"]`、`provider in ["runpod", "vast"]`、`host_tags contains "a100"` |
 | scheduling preference | 在多个合法解里更想怎么选 | `prefer local`、`avoid shared`、`spread across hosts`、`pack small jobs` |
 
 这三层一定要拆开，否则语言会很快变乱。
@@ -221,15 +221,12 @@ runtime 真正调度的应该是 `TaskInstance`，不是模板本身。
 - `ram_gb`
 - `required_tags`
 - `required_labels`
-- `co_located`
-- `same_host`
 
 例如：
 
-- 需要至少 4 张 GPU
-- 需要至少 40 GB 显存
+- 需要至少 24 GB 显存
 - 必须跑在 `ssh` 或 `slurm`
-- 必须跑在带 `multi-gpu` 标签的主机上
+- 必须跑在带 `a100` 标签的主机上
 
 #### `CheckpointPolicy`
 
@@ -357,10 +354,9 @@ runtime 真正调度的应该是 `TaskInstance`，不是模板本身。
 
 例如：
 
-- 需要 4 张 GPU
-- 需要大于等于 40 GB GPU 显存
+- 需要大于等于 24 GB GPU 显存
 - 必须用 `ssh` 或 `slurm`
-- 必须是 `multi-gpu` 主机
+- 必须来自 `runpod` 或 `vast`
 
 如果没有任何资源满足这些条件，系统就应该明确告诉用户这个任务不可调度。
 
@@ -509,9 +505,9 @@ experiment train_large {
   use_pool = "txstate_shared"
 
   requires {
-    gpu_count >= 4
+    gpu_mem_gb >= 24
     backend in ["ssh", "slurm"]
-    host_tags contains "multi-gpu"
+    provider in ["runpod", "vast"]
   }
 
   prefers {
@@ -632,8 +628,8 @@ bash -lc "uv run python run_experiment.py ${dataset} ${pred_len} --seed ${seed}"
 
 ```text
 task train_large is unschedulable:
-- requires gpu_count >= 4
-- requires host_tags contains "multi-gpu"
+- requires gpu_mem_gb >= 24
+- requires provider in ["runpod", "vast"]
 - no host in pool txstate_shared satisfies both constraints
 ```
 

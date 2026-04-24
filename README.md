@@ -1,14 +1,23 @@
-# slot-scheduler
+# SchedLang
 
 Chinese README: [README.zh-CN.md](README.zh-CN.md)
 
-`slot-scheduler` is a small, repo-friendly experiment launcher for mixed compute fleets.
+`SchedLang` is a scheduling language and tooling repo for heterogeneous research compute.
 
-It is designed for the annoying real-world setup where some jobs should go through Slurm, some should go through plain SSH, and some can run locally. Instead of hard-coding all of that inside one project script, this repo keeps the resource inventory, backend logic, and queueing loop separate from your experiment code.
+This repo currently includes:
+
+- the experimental `SchedLang` DSL for expressing scheduling intent
+- a compiler that emits `jobs.yaml`, optional derived inventory files, and placement reports
+- the current `slot-scheduler` runtime and CLI for executing compiled jobs
+- helper tools such as inventory watchers, examples, and design notes
+
+It is designed for the annoying real-world setup where some jobs should go through Slurm, some should go through plain SSH, and some can run locally. Instead of hard-coding all of that inside one project script, this repo separates the language, resource inventory, runtime, and helper tooling from your experiment code.
+
+For now, `slot-scheduler` is still the runtime / package / CLI name inside the repo. `SchedLang` is the broader project name.
 
 ## Positioning
 
-`slot-scheduler` is not trying to compete with full experiment platforms such as ClearML.
+`SchedLang` is not trying to compete with full experiment platforms such as ClearML.
 
 ClearML, SkyPilot, Ray-based platforms, and similar systems already do much more than this project:
 
@@ -28,17 +37,18 @@ The goal here is:
 - no assumption that all compute belongs to one cluster manager
 - plain files, plain YAML, plain shell or Python commands
 
-In other words, `slot-scheduler` is best thought of as a lightweight scheduling layer for messy real-world research compute, not as a full MLOps platform.
+In other words, `SchedLang` is best thought of as a lightweight scheduling language plus execution toolkit for messy real-world research compute, not as a full MLOps platform.
 
 ## What It Does
 
+- Defines scheduling intent in `.sched` files
+- Compiles higher-level intent into runtime YAML and placement reports
 - Treats each runnable resource as a `slot`
 - Supports `local`, `ssh + tmux`, and `slurm` backends
-- Reads slots and jobs from YAML
-- Launches one job per slot
+- Launches one job per slot in the current runtime
 - Polls running jobs and backfills open slots
 - Writes a JSONL event log for inspection and post-processing
-- Records per-job console logs and exit-code markers
+- Ships helper tools for inventory watching and experimentation
 
 ## What It Does Not Do Yet
 
@@ -51,7 +61,7 @@ That is deliberate for the first version. The goal is a simple, hackable control
 
 ## Use This When
 
-`slot-scheduler` is a good fit if you want to:
+`SchedLang` is a good fit if you want to:
 
 - keep existing training scripts unchanged
 - schedule plain shell or Python commands
@@ -83,7 +93,7 @@ This repo is intentionally not trying to be:
 - a cloud control plane
 - a distributed runtime
 
-The value proposition is narrower: make it easy to keep a small fleet of heterogeneous machines busy without forcing the rest of your stack to change.
+The value proposition is narrower: make it easy to express scheduling intent and keep a small fleet of heterogeneous machines busy without forcing the rest of your stack to change.
 
 ## Layout
 
@@ -268,7 +278,7 @@ The current compiler also understands assignment-style `requires { ... }` and `p
 - host-level constraints such as `requires { host = "sun" }` are also preserved and enforced by the current runtime
 - provider-level constraints such as `requires { provider = "runpod" }` are also preserved and enforced by the current runtime
 - market-level constraints such as `requires { market = "spot"; preemptible = true }` are also preserved and enforced
-- multi-GPU requirements such as `gpu_count = 4` are validated in the compile report, but still need a future multi-slot runtime
+- richer resource requirements such as `gpu_count` are preserved in the compile report, but the current runtime intentionally focuses on single-slot jobs
 
 Example:
 
@@ -341,7 +351,7 @@ Notes:
 - today the runtime directly enforces `backends`, `required_tags`, `slots`, and host filters from `requirements`
 - provider filters from `requirements` are also enforced end-to-end
 - `market` and `preemptible` filters are also enforced end-to-end
-- `report.yaml` explains candidate slots and flags whether a job is `ready`, `unschedulable`, or currently `needs_multi_slot_runtime`
+- `report.yaml` explains candidate slots and flags whether a job is `ready`, `unschedulable`, or outside the current single-slot runtime scope
 
 The reference examples are:
 

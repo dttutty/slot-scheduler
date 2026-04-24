@@ -37,7 +37,7 @@ The language should separate three different kinds of information.
 | Layer | Meaning | Typical examples |
 | --- | --- | --- |
 | Resource capability | What the infrastructure has | `backend = ssh`, `provider = "runpod"`, `gpu_count = 8`, `gpu_mem_gb = 80`, `tags = ["shared", "a100"]` |
-| Task requirement | What a task must have | `gpu_count >= 4`, `backend in ["slurm", "ssh"]`, `provider in ["runpod", "vast"]`, `host_tags contains "a100"` |
+| Task requirement | What a task must have | `gpu_mem_gb >= 24`, `backend in ["slurm", "ssh"]`, `provider in ["runpod", "vast"]`, `host_tags contains "a100"` |
 | Scheduling preference | What the scheduler should try first | `prefer local`, `avoid shared`, `spread across hosts`, `pack small jobs` |
 
 This separation is important because the same phrase can mean very different things.
@@ -203,8 +203,6 @@ Suggested fields:
 - `ram_gb`
 - `required_tags`
 - `required_labels`
-- `co_located`
-- `same_host`
 
 If a requirement is not satisfied, the task is unschedulable for that placement.
 
@@ -330,10 +328,9 @@ Hard constraints determine feasibility.
 
 Examples:
 
-- needs 4 GPUs
-- needs at least 40 GB GPU memory
+- needs at least 24 GB GPU memory
 - must run on `ssh` or `slurm`
-- must run on a host tagged `multi-gpu`
+- must run on a host tagged `a100`
 
 If no host satisfies these constraints, the scheduler should say so directly.
 
@@ -481,9 +478,9 @@ experiment train_large {
   use_pool = "txstate_shared"
 
   requires {
-    gpu_count >= 4
+    gpu_mem_gb >= 24
     backend in ["ssh", "slurm"]
-    host_tags contains "multi-gpu"
+    provider in ["runpod", "vast"]
   }
 
   prefers {
@@ -604,8 +601,8 @@ Examples:
 
 ```text
 task train_large is unschedulable:
-- requires gpu_count >= 4
-- requires host_tags contains "multi-gpu"
+- requires gpu_mem_gb >= 24
+- requires provider in ["runpod", "vast"]
 - no host in pool txstate_shared satisfies both constraints
 ```
 

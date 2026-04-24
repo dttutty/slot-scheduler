@@ -1,8 +1,15 @@
-# slot-scheduler
+# SchedLang
 
 English README: [README.md](README.md)
 
-`slot-scheduler` 是一个面向混合算力环境的小型实验调度器，适合直接放在代码仓库里使用。
+`SchedLang` 是一个面向异构研究算力环境的调度语言及其工具链仓库。
+
+这个 repo 目前主要包含：
+
+- 用来表达调度意图的实验性 `SchedLang` DSL
+- 把高层语言编译成 `jobs.yaml`、派生 inventory 和 placement report 的 compiler
+- 当前负责真正执行任务的 `slot-scheduler` runtime 和 CLI
+- 配套的 inventory 观察工具、示例和设计文档
 
 它针对的是一种很常见、但往往很乱的真实环境：
 
@@ -10,11 +17,13 @@ English README: [README.md](README.md)
 - 有些任务只能走普通 SSH
 - 有些任务就在本机跑
 
-与其把这些逻辑全部硬编码进某个项目脚本里，不如把资源清单、后端启动方式和队列调度逻辑单独拆出来，这就是 `slot-scheduler` 的定位。
+与其把这些逻辑全部硬编码进某个项目脚本里，不如把语言、资源清单、runtime 和辅助工具单独拆出来，这就是 `SchedLang` 的定位。
+
+当前仓库里的 Python 包、runtime 和 CLI 名字仍然叫 `slot-scheduler`，而 `SchedLang` 是整个项目的名字。
 
 ## 定位
 
-`slot-scheduler` 并不打算和 ClearML 这一类完整实验平台竞争。
+`SchedLang` 并不打算和 ClearML 这一类完整实验平台竞争。
 
 ClearML、SkyPilot、基于 Ray 的平台，以及类似系统，通常都能提供比它更多的功能：
 
@@ -34,17 +43,18 @@ ClearML、SkyPilot、基于 Ray 的平台，以及类似系统，通常都能提
 - 不假设所有算力都归同一个集群管理器统一管理
 - 使用 plain files、plain YAML、plain shell / Python 命令
 
-所以更准确地说，`slot-scheduler` 是一个面向混乱研究算力环境的轻量调度层，而不是一个完整的 MLOps 平台。
+所以更准确地说，`SchedLang` 是一个面向混乱研究算力环境的轻量调度语言加执行工具集，而不是一个完整的 MLOps 平台。
 
 ## 它能做什么
 
+- 用 `.sched` 文件表达调度意图
+- 把高层意图编译成 runtime 用的 YAML 和 placement report
 - 把每个可运行资源抽象成一个 `slot`
 - 支持 `local`、`ssh + tmux`、`slurm` 三种 backend
-- 从 YAML 读取 slot 和 job 定义
-- 每个 slot 同一时刻只跑一个 job
+- 当前 runtime 仍然是“每个 slot 同时一个 job”
 - 轮询运行中的任务，并在 slot 空出来后自动补位
 - 写入 JSONL 事件日志，便于排查和后处理
-- 为每个 job 记录 console log 和 exit-code 标记文件
+- 自带 inventory 观察和实验辅助工具
 
 ## 它暂时不做什么
 
@@ -89,7 +99,7 @@ ClearML、SkyPilot、基于 Ray 的平台，以及类似系统，通常都能提
 - 云资源控制平面
 - 分布式运行时
 
-它的价值主张更窄一些：在不强迫其他技术栈改变的前提下，让一小批异构机器尽可能稳定地跑实验。
+它的价值主张更窄一些：在不强迫其他技术栈改变的前提下，更自然地表达调度意图，并让一小批异构机器尽可能稳定地跑实验。
 
 ## 目录结构
 
@@ -275,7 +285,7 @@ uv run slot-scheduler run \
 - 像 `requires { host = "sun" }` 这种 host 级限制，也会作为结构化约束保留下来，并且当前 runtime 已经会执行
 - 像 `requires { provider = "runpod" }` 这种平台来源约束，也会作为结构化约束保留下来，并且当前 runtime 已经会执行
 - 像 `requires { market = "spot"; preemptible = true }` 这种资源市场约束，也会被完整保留下来并在 runtime 中执行
-- 像 `gpu_count = 4` 这种多卡要求，会在 compile report 里被验证出来，但还需要未来的 multi-slot runtime 才能真正执行
+- 像 `gpu_count` 这种更丰富的资源要求，会被保留在 compile report 里，但当前 runtime 是刻意围绕单 slot 任务来设计的
 
 示例：
 
@@ -348,7 +358,7 @@ uv run slot-scheduler run \
 - 当前 runtime 会直接执行 `backends`、`required_tags`、`slots`，以及 `requirements` 里的 host 过滤
 - 当前 runtime 也会直接执行 `requirements` 里的 provider 过滤
 - `market` 和 `preemptible` 这层过滤现在也已经是端到端生效的
-- `report.yaml` 会额外解释 candidate slots，并标记一个 job 当前是 `ready`、`unschedulable`，还是 `needs_multi_slot_runtime`
+- `report.yaml` 会额外解释 candidate slots，并标记一个 job 当前是 `ready`、`unschedulable`，还是超出了当前单 slot runtime 的范围
 
 参考例子在这里：
 
