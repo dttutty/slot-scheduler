@@ -27,7 +27,10 @@ slots:
     backend: ssh
     host: box
     gpu: 1
+    provider: runpod
+    market: spot
     password_env: SSH_PASS
+    rebalance_signal: true
         """.strip()
         + "\n",
         encoding="utf-8",
@@ -55,6 +58,10 @@ jobs:
     assert [slot.name for slot in slots] == ["local-g0", "ssh-g0"]
     assert slots[1].host == "box"
     assert slots[1].password_env == "SSH_PASS"
+    assert slots[1].provider == "runpod"
+    assert slots[1].market == "spot"
+    assert slots[1].preemptible is True
+    assert slots[1].rebalance_signal is True
     assert host_policies["box"].max_active_fraction == 0.5
     assert jobs[0].command == ("python", "-c", "print('ok')")
     assert jobs[0].backends == ("local", "ssh")

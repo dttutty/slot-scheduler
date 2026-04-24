@@ -1,0 +1,20 @@
+pool aws_spot_ssh {
+  requires {
+    backend = "ssh"
+    market = "spot"
+    preemptible = true
+  }
+  prefers {
+    prefer_preemptible = true
+  }
+}
+
+experiment spot_smoke {
+  use_pool = "aws_spot_ssh"
+  matrix {
+    run_id = ["a", "b"]
+  }
+  command = """
+bash -lc "echo running ${run_id} on a spot-backed ssh worker"
+"""
+}

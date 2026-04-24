@@ -104,9 +104,11 @@ slot-scheduler/
 ├── examples/
 │   ├── demo.sched
 │   ├── inventory.leap2.yaml
+│   ├── inventory.marketplace-ssh.yaml
 │   ├── inventory.mixed.yaml
 │   ├── inventory.txstate-ssh.yaml
 │   ├── jobs.demo.yaml
+│   ├── marketplace_smoke.sched
 │   └── txstate_vlmlp.sched
 ├── src/slot_scheduler/
 │   ├── backends.py
@@ -148,6 +150,10 @@ slots:
     backend: ssh
     host: gpu2-001
     gpu: 0
+    provider: aws
+    market: spot
+    preemptible: true
+    rebalance_signal: true
     workdir: /var/tmp/sqp17/code/VLMLP
     run_root: /var/tmp/sqp17/slot-scheduler/runs
     tags: [ssh, spillover]
@@ -161,6 +167,22 @@ slots:
 - `max_active_fraction`：按该机器声明的 slot 数量计算比例上限
 
 例如，一台 2-GPU 机器如果配置了 `max_active_fraction: 0.5`，那它同一时刻最多只会运行 1 个 slot。
+
+对于云上 worker，还可以额外带这些可选元数据：
+
+- `provider`：资源平台来源，比如 `aws`、`runpod`、`vast`、`tensordock`、`salad`
+- `market`：资源市场属性，比如 `spot` 或 `on-demand`
+- `preemptible`：这台 worker 是否可能被云平台回收
+- `interruption_behavior`：云平台侧的中断行为元数据
+- `rebalance_signal`：是否预期会收到提前的 rebalance 信号
+
+这几个概念是刻意分开的：
+
+- `backend` 表示“任务怎么启动”，比如 `ssh`、`slurm`、`local`
+- `provider` 表示“机器来自哪个平台”
+- `market` 表示“这份容量属于哪种市场”，比如 `spot` 或 `on-demand`
+
+`provider` 只是平台来源标签，不会自己创建新的启动通道。要真正发任务，这些 marketplace worker 仍然需要通过现有 backend 接入，比如 `ssh`、`slurm` 或 `local`。
 
 如果你已经在 `~/.ssh/config` 里配置了 SSH alias，也可以直接这么写：
 
@@ -251,6 +273,8 @@ uv run slot-scheduler run \
 - `requires` 表示硬约束；其中当前 runtime 已经认识的那部分，会继续映射成老的 `backends`、`required_tags`、`slots`
 - `prefers` 表示软偏好；当前先原样保存在编译后的 YAML 里，为后面的 ranking 和 explainability 打基础
 - 像 `requires { host = "sun" }` 这种 host 级限制，也会作为结构化约束保留下来，并且当前 runtime 已经会执行
+- 像 `requires { provider = "runpod" }` 这种平台来源约束，也会作为结构化约束保留下来，并且当前 runtime 已经会执行
+- 像 `requires { market = "spot"; preemptible = true }` 这种资源市场约束，也会被完整保留下来并在 runtime 中执行
 - 像 `gpu_count = 4` 这种多卡要求，会在 compile report 里被验证出来，但还需要未来的 multi-slot runtime 才能真正执行
 
 示例：
@@ -317,16 +341,23 @@ uv run slot-scheduler run \
 几点说明：
 
 - 这个 DSL 目前是刻意做小、并且明确是实验性的
-- 现在字符串字面量还是用 Python 风格，比如 `"ssh"`、`["sun", "moon"]`
+- 现在字符串和列表字面量还是用 Python 风格，比如 `"ssh"`、`["sun", "moon"]`
+- 布尔值同时接受 Python 风格的 `True` / `False` 和 DSL 风格的 `true` / `false`
 - 多行 shell 命令最适合放在三引号字符串里
 - 实际 runtime 的最终事实来源，仍然是编译出来的 YAML
 - 当前 runtime 会直接执行 `backends`、`required_tags`、`slots`，以及 `requirements` 里的 host 过滤
+- 当前 runtime 也会直接执行 `requirements` 里的 provider 过滤
+- `market` 和 `preemptible` 这层过滤现在也已经是端到端生效的
 - `report.yaml` 会额外解释 candidate slots，并标记一个 job 当前是 `ready`、`unschedulable`，还是 `needs_multi_slot_runtime`
 
 参考例子在这里：
 
 - [examples/demo.sched](examples/demo.sched)
+- [examples/marketplace_smoke.sched](examples/marketplace_smoke.sched)
+- [examples/spot_smoke.sched](examples/spot_smoke.sched)
 - [examples/txstate_vlmlp.sched](examples/txstate_vlmlp.sched)
+- [examples/inventory.ec2-mixed.yaml](examples/inventory.ec2-mixed.yaml)
+- [examples/inventory.marketplace-ssh.yaml](examples/inventory.marketplace-ssh.yaml)
 
 ## 观察工具
 

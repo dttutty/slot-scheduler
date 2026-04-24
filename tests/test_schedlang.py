@@ -22,6 +22,9 @@ pool ssh_demo {
   requires {
     backends = ["ssh"]
     host_tags = ["txstate"]
+    provider = "runpod"
+    market = "spot"
+    preemptible = true
   }
 }
 
@@ -40,6 +43,7 @@ experiment smoke {
   prefers {
     host_tags = ["a100"]
     avoid_host_tags = ["shared"]
+    prefer_preemptible = true
     placement = "spread"
   }
   retries = 1
@@ -58,10 +62,18 @@ bash -lc "python run.py ${dataset} ${pred_len}"
     assert jobs[0]["name"] == "job_ETTh2_96"
     assert jobs[0]["backends"] == ["ssh"]
     assert jobs[0]["required_tags"] == ["txstate"]
-    assert jobs[0]["requirements"] == {"backends": ["ssh"], "required_tags": ["txstate"], "gpu_count": 1}
+    assert jobs[0]["requirements"] == {
+        "backends": ["ssh"],
+        "required_tags": ["txstate"],
+        "providers": ["runpod"],
+        "markets": ["spot"],
+        "preemptible": True,
+        "gpu_count": 1,
+    }
     assert jobs[0]["preferences"] == {
         "host_tags": ["a100"],
         "avoid_host_tags": ["shared"],
+        "prefer_preemptible": True,
         "placement": "spread",
     }
     assert jobs[0]["env"]["OMP_NUM_THREADS"] == "8"
@@ -106,6 +118,54 @@ experiment large_train {
             }
         ]
     }
+
+
+def test_compile_schedlang_report_filters_by_provider_market_and_preemptible() -> None:
+    jobs_payload = {
+        "jobs": [
+            {
+                "name": "spot-only",
+                "command": "echo run",
+                "requirements": {
+                    "backends": ["ssh"],
+                    "providers": ["runpod"],
+                    "markets": ["spot"],
+                    "preemptible": True,
+                },
+                "preferences": {
+                    "providers": ["runpod"],
+                },
+            }
+        ]
+    }
+    inventory = {
+        "slots": [
+            {
+                "name": "runpod-spot-a",
+                "backend": "ssh",
+                "host": "runpod-spot-a",
+                "provider": "runpod",
+                "market": "spot",
+                "preemptible": True,
+                "tags": [],
+            },
+            {
+                "name": "vast-spot-a",
+                "backend": "ssh",
+                "host": "vast-spot-a",
+                "provider": "vast",
+                "market": "spot",
+                "preemptible": True,
+                "tags": [],
+            },
+        ]
+    }
+
+    report = compile_report_document(jobs_payload, inventory)
+
+    assert report["summary"]["status_counts"] == {"ready": 1}
+    assert report["jobs"][0]["candidate_slots"] == ["runpod-spot-a"]
+    assert report["jobs"][0]["preferred_slots"] == ["runpod-spot-a"]
 
 
 def test_compile_schedlang_inventory_overlay() -> None:

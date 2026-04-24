@@ -26,6 +26,7 @@
 - 有本机 worker
 - 有 SSH 机器
 - 有 Slurm 节点
+- 有像 EC2 Spot 这种可抢占的云资源
 - 有共享服务器，不能随便占满
 - 有些任务只要 1 张 GPU
 - 有些任务必须上多 GPU 主机
@@ -39,8 +40,8 @@ runtime 继续保持简单；语言负责把“我想怎么调度”说清楚。
 
 | 语义层 | 含义 | 例子 |
 | --- | --- | --- |
-| resource capability | 资源本身拥有什么 | `backend = ssh`、`gpu_count = 8`、`gpu_mem_gb = 80`、`tags = ["shared", "a100"]` |
-| task requirement | 任务必须满足什么 | `gpu_count >= 4`、`backend in ["ssh", "slurm"]`、`host_tags contains "a100"` |
+| resource capability | 资源本身拥有什么 | `backend = ssh`、`provider = "runpod"`、`gpu_count = 8`、`gpu_mem_gb = 80`、`tags = ["shared", "a100"]` |
+| task requirement | 任务必须满足什么 | `gpu_count >= 4`、`backend in ["ssh", "slurm"]`、`provider in ["runpod", "vast"]`、`host_tags contains "a100"` |
 | scheduling preference | 在多个合法解里更想怎么选 | `prefer local`、`avoid shared`、`spread across hosts`、`pack small jobs` |
 
 这三层一定要拆开，否则语言会很快变乱。
@@ -50,6 +51,47 @@ runtime 继续保持简单；语言负责把“我想怎么调度”说清楚。
 - “`sun` 是共享服务器”是资源事实
 - “这个任务不能跑在共享服务器上”是任务要求
 - “优先不用共享服务器，不得已再退回去”是调度偏好
+
+对于可抢占资源，这个区分仍然成立：
+
+- “这个 pool 是 Spot 支撑的”是资源事实
+- “这个任务可以接受被抢占”是任务能力或要求
+- “优先 On-Demand，不够再 spill 到 Spot”是调度偏好
+
+## 生命周期与抢占语义
+
+除了 placement，这门语言还需要能表达运行时生命周期。
+
+这在下面这些资源上尤其重要：
+
+- EC2 Spot Instances
+- 其他云上的 preemptible VM
+- 集群里低优先级、可撤销的队列
+
+因为这时候问题不只是：
+
+- 任务能不能跑在这里
+
+还包括：
+
+- 资源快没了的时候该怎么处理
+- 任务能不能恢复
+- 可恢复状态要写到哪里
+- 恢复时是 restart 还是 resume
+
+所以这里其实还存在一个横切的第四维：
+
+| 生命周期关注点 | 含义 | 例子 |
+| --- | --- | --- |
+| preemption semantics | 资源可能怎么被打断 | `market = spot`、`preemptible = true`、`rebalance_signal = true` |
+| drain semantics | 资源即将消失前要做什么 | `stop_accepting_new_work`、`checkpoint-and-exit`、`flush-metrics` |
+| recovery semantics | 任务之后怎么继续 | `resume-from-checkpoint`、`restart-from-scratch`、`requeue-on-preemption` |
+
+这一层会横跨前面的三层语义，因为它同时涉及：
+
+- 资源事实
+- 任务能力
+- scheduler/runtime 的策略
 
 看起来只是差一句话，实际语义完全不同。
 
@@ -67,6 +109,7 @@ runtime 继续保持简单；语言负责把“我想怎么调度”说清楚。
 
 - `name`
 - `backend`
+- `provider`
 - `address` 或 `alias`
 - `gpu_count`
 - `gpu_mem_gb`
@@ -76,6 +119,10 @@ runtime 继续保持简单；语言负责把“我想怎么调度”说清楚。
 - `tags`
 - `shared`
 - `labels`
+- `market`
+- `preemptible`
+- `interruption_behavior`
+- `rebalance_signal`
 
 它回答的问题是：
 
@@ -86,6 +133,8 @@ runtime 继续保持简单；语言负责把“我想怎么调度”说清楚。
 - `sun` 是一台通过 SSH 登录的 8 卡机器
 - `moon` 是一台通过 SSH 登录的 2 卡机器
 - `gpu1-003` 是一台通过 Slurm 可达的单卡节点
+- 一台 RunPod 机器仍然可以是 `backend = "ssh"`，同时带 `provider = "runpod"`
+- 一个 EC2 worker pool 也可能是 `market = "spot"` 且 `preemptible = true`
 
 #### `SlotCapability`
 
@@ -135,6 +184,9 @@ runtime 继续保持简单；语言负责把“我想怎么调度”说清楚。
 - `retries`
 - `requirements`
 - `preferences`
+- `checkpoint`
+- `resume_policy`
+- `preemption_policy`
 
 它和当前实现里的 `experiment` 最接近。
 
@@ -161,6 +213,7 @@ runtime 真正调度的应该是 `TaskInstance`，不是模板本身。
 
 - `backend`
 - `host`
+- `provider`
 - `pool`
 - `slot`
 - `gpu_count`
@@ -178,6 +231,84 @@ runtime 真正调度的应该是 `TaskInstance`，不是模板本身。
 - 需要至少 40 GB 显存
 - 必须跑在 `ssh` 或 `slurm`
 - 必须跑在带 `multi-gpu` 标签的主机上
+
+#### `CheckpointPolicy`
+
+表示任务怎样把“可恢复状态”持久化下来。
+
+建议字段：
+
+- `path`
+- `storage`
+- `interval`
+- `on_rebalance`
+- `on_interruption`
+- `finalize_artifacts`
+
+这里最重要的一条设计原则是：
+
+**不要把“最后两分钟抢救文件”当作主恢复机制。**
+
+更合理的模型应该是：
+
+- 平时就持续写 checkpoint 到持久存储
+- 被抢占时只做最后一次 flush / finalize
+
+#### `ResumePolicy`
+
+表示任务被中断后该怎样继续。
+
+建议字段：
+
+- `mode`
+- `checkpoint_selector`
+- `max_resume_age`
+- `requeue_on_preemption`
+
+典型模式：
+
+- `restart`
+- `resume`
+- `resume-if-possible`
+
+### 生命周期侧对象
+
+#### `PreemptionPolicy`
+
+表示当任务运行在可抢占资源上时，runtime 应该怎么处理。
+
+建议字段：
+
+- `tolerates_preemption`
+- `preferred_market`
+- `fallback_market`
+- `on_rebalance`
+- `on_interruption`
+- `max_preemptions`
+
+它回答的问题包括：
+
+- 这个任务能不能跑在 Spot 上
+- scheduler 是应该优先 Spot，还是尽量避免 Spot
+- 收到 rebalance/interruption 时，是 checkpoint-and-requeue 还是直接 fail
+- 被抢占几次之后，要不要升级到 On-Demand
+
+#### `DrainPolicy`
+
+表示一台即将消失的 worker 在优雅退出前，应该按什么顺序执行哪些动作。
+
+建议字段：
+
+- `stop_new_work`
+- `checkpoint_timeout_sec`
+- `flush_logs`
+- `upload_small_artifacts`
+- `graceful_exit`
+
+它和 `CheckpointPolicy` 是故意分开的。
+
+- `CheckpointPolicy` 关注“什么状态需要保存”
+- `DrainPolicy` 关注“快没时间时按什么顺序收尾”
 
 ### 调度侧对象
 
@@ -200,6 +331,7 @@ runtime 真正调度的应该是 `TaskInstance`，不是模板本身。
 例如：
 
 - 优先用 `a100`
+- 优先用 `runpod` 这一类 provider
 - 尽量别用 `shared`
 - 同一组 sweep 尽量分散到不同主机
 - 小任务尽量 pack 到少数机器上
@@ -246,6 +378,30 @@ runtime 真正调度的应该是 `TaskInstance`，不是模板本身。
 
 如果偏好满足不了，任务仍然应该在最好的合法位置继续跑，而不是直接失败。
 
+## Spot 和其他可抢占资源
+
+对于 EC2 Spot 这类资源，我觉得语言不应该把“被打断”当成附属细节。
+
+比较合理的模型应该是：
+
+1. 先通过单独的 provisioner 或 pool 申请可抢占容量
+2. 把起来的 worker 注册成 runtime slots
+3. 持续监听 rebalance/interruption 信号
+4. 触发 drain
+5. 做 checkpoint
+6. 把任务 requeue 或 resume 到别处
+
+这通常比“等到抢占通知来了再临时把文件收回来”更稳。
+
+最后那 2 分钟太短，也不够可靠，不能作为主要持久化机制。
+
+所以语言设计上更应该默认：
+
+- 重要状态是持续 checkpoint 的
+- 小的最终产物可以在 drain 阶段补上传
+- 主恢复机制是 `checkpoint + requeue`
+- 不是临时 emergency rsync
+
 ## 编译管线
 
 比较完整的 `SchedLang` 编译流程应该长这样：
@@ -256,10 +412,12 @@ runtime 真正调度的应该是 `TaskInstance`，不是模板本身。
 4. 解析 `pool` 和默认值继承
 5. 把任务 requirement 和资源 capability 做匹配，得到候选 placement
 6. 用 preference 和 host policy 给候选 placement 排序
-7. 输出：
+7. 给每个任务挂上生命周期和恢复元数据
+8. 输出：
    - 编译后的 `jobs.yaml`
    - 可选的派生 `inventory.yaml`
    - 可选的 placement plan / explain report
+   - 可选的 drain / recovery plan
 
 当前原型实际上只做了其中一小段：
 
@@ -273,6 +431,7 @@ runtime 真正调度的应该是 `TaskInstance`，不是模板本身。
 - 更强的 requirement 求解
 - preference 打分
 - explainability 输出
+- preemption-aware recovery planning
 
 ## 当前原型和长期模型的对应关系
 
@@ -332,6 +491,18 @@ policy shared_half {
 }
 ```
 
+### 可抢占云资源池
+
+```text
+pool aws_spot_train {
+  backend = "ec2-fleet"
+  market = "spot"
+  preemptible = true
+  allocation_strategy = "price-capacity-optimized"
+  rebalance_signal = true
+}
+```
+
 ### 带显式 requirement / preference 的任务模板
 
 ```text
@@ -352,6 +523,24 @@ experiment train_large {
 
   env {
     OMP_NUM_THREADS = "16"
+  }
+
+  checkpoint {
+    path = "s3://my-bucket/checkpoints/${task}"
+    interval = "5m"
+    on_rebalance = "save"
+    on_interruption = "save"
+  }
+
+  preemption {
+    tolerates_preemption = true
+    on_rebalance = "checkpoint-and-requeue"
+    on_interruption = "checkpoint-and-exit"
+  }
+
+  resume {
+    mode = "resume-if-possible"
+    requeue_on_preemption = true
   }
 
   run = """
@@ -378,6 +567,16 @@ experiment vlmlp_grid {
 
   prefers {
     placement = "spread"
+  }
+
+  checkpoint {
+    path = "s3://my-bucket/vlmlp/${dataset}/${pred_len}/${seed}"
+    interval = "10m"
+  }
+
+  resume {
+    mode = "resume"
+    requeue_on_preemption = true
   }
 
   run = """
@@ -412,7 +611,15 @@ bash -lc "uv run python run_experiment.py ${dataset} ${pred_len} --seed ${seed}"
 - `explain` 输出
 - 更强的 pool 组合能力
 
-### V3：全局策略
+### V3：preemption-aware execution
+
+- 加 `checkpoint { ... }`
+- 加 `preemption { ... }`
+- 加 `resume { ... }`
+- compile-time report 能区分 `ready`、`unschedulable`、`needs-multi-slot-runtime`
+- 为 Spot 这类资源生成 drain / recovery 计划
+
+### V4：全局策略
 
 - `strategy = "greedy" | "spread" | "pack" | "fair-share"`
 - reservation / anti-affinity
@@ -439,6 +646,14 @@ task vlmlp_ETTh2_96_s1 scheduled on sun-g2:
 - satisfies gpu_count >= 1
 - matches preferred tag txstate
 - moon is deprioritized by shared-host policy
+```
+
+```text
+task train_large on spot-worker-17 is draining:
+- pool market = spot
+- rebalance recommendation received
+- checkpoint path = s3://my-bucket/checkpoints/train_large
+- action = checkpoint-and-requeue
 ```
 
 如果没有 explainability，这门语言越强，反而越难让人信任。

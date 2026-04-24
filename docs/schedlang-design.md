@@ -24,6 +24,7 @@ The goal of this document is to define:
 - local workers
 - SSH-accessible servers
 - Slurm-managed nodes
+- preemptible cloud capacity such as EC2 Spot Instances
 - shared hosts with policy limits
 - tasks with different GPU and placement needs
 
@@ -35,8 +36,8 @@ The language should separate three different kinds of information.
 
 | Layer | Meaning | Typical examples |
 | --- | --- | --- |
-| Resource capability | What the infrastructure has | `backend = ssh`, `gpu_count = 8`, `gpu_mem_gb = 80`, `tags = ["shared", "a100"]` |
-| Task requirement | What a task must have | `gpu_count >= 4`, `backend in ["slurm", "ssh"]`, `host_tags contains "a100"` |
+| Resource capability | What the infrastructure has | `backend = ssh`, `provider = "runpod"`, `gpu_count = 8`, `gpu_mem_gb = 80`, `tags = ["shared", "a100"]` |
+| Task requirement | What a task must have | `gpu_count >= 4`, `backend in ["slurm", "ssh"]`, `provider in ["runpod", "vast"]`, `host_tags contains "a100"` |
 | Scheduling preference | What the scheduler should try first | `prefer local`, `avoid shared`, `spread across hosts`, `pack small jobs` |
 
 This separation is important because the same phrase can mean very different things.
@@ -46,6 +47,43 @@ For example:
 - `"sun is shared"` is a resource fact
 - `"this task must not run on shared hosts"` is a task requirement
 - `"prefer non-shared hosts, but fall back to shared hosts if needed"` is a scheduling preference
+
+For preemptible resources, the same separation still matters:
+
+- `"this pool is Spot-backed"` is a resource fact
+- `"this task tolerates preemption"` is a task requirement or capability declaration
+- `"prefer On-Demand, but spill to Spot"` is a scheduling preference
+
+## Lifecycle and Preemption Semantics
+
+In addition to placement, a practical scheduling language also needs to describe lifecycle behavior.
+
+This becomes especially important for:
+
+- EC2 Spot Instances
+- preemptible VMs in other clouds
+- low-priority or revocable cluster queues
+
+For these resources, the question is not only "where can this task run?" but also:
+
+- what should happen when the resource is about to disappear
+- whether the task can recover
+- where recoverable state should be written
+- whether the task should restart or resume
+
+This suggests a fourth conceptual dimension:
+
+| Lifecycle concern | Meaning | Typical examples |
+| --- | --- | --- |
+| Preemption semantics | What can interrupt the resource | `market = spot`, `preemptible = true`, `rebalance_signal = true` |
+| Drain semantics | What to do before the resource disappears | `stop_accepting_new_work`, `checkpoint-and-exit`, `flush-metrics` |
+| Recovery semantics | How the task continues elsewhere | `resume-from-checkpoint`, `restart-from-scratch`, `requeue-on-preemption` |
+
+This layer cuts across the previous three semantic layers, because it involves:
+
+- resource facts
+- task capabilities
+- scheduler and runtime policy
 
 ## Core Object Model
 
@@ -61,6 +99,7 @@ Suggested fields:
 
 - `name`
 - `backend`
+- `provider`
 - `address` or `alias`
 - `gpu_count`
 - `gpu_mem_gb`
@@ -70,12 +109,18 @@ Suggested fields:
 - `tags`
 - `shared`
 - `labels`
+- `market`
+- `preemptible`
+- `interruption_behavior`
+- `rebalance_signal`
 
 Example meaning:
 
 - `sun` is an SSH host with 8 GPUs
 - `moon` is an SSH host with 2 GPUs
 - `gpu1-003` is a Slurm-reachable single-GPU node
+- a RunPod worker can still use `backend = "ssh"` while setting `provider = "runpod"`
+- an EC2 worker pool might be `market = "spot"` and `preemptible = true`
 
 #### `SlotCapability`
 
@@ -120,6 +165,9 @@ Suggested fields:
 - `retries`
 - `requirements`
 - `preferences`
+- `checkpoint`
+- `resume_policy`
+- `preemption_policy`
 
 This is close to the current `experiment` block.
 
@@ -146,6 +194,7 @@ Suggested fields:
 
 - `backend`
 - `host`
+- `provider`
 - `pool`
 - `slot`
 - `gpu_count`
@@ -158,6 +207,79 @@ Suggested fields:
 - `same_host`
 
 If a requirement is not satisfied, the task is unschedulable for that placement.
+
+#### `CheckpointPolicy`
+
+Describes how a task persists recoverable state.
+
+Suggested fields:
+
+- `path`
+- `storage`
+- `interval`
+- `on_rebalance`
+- `on_interruption`
+- `finalize_artifacts`
+
+The main design goal is to avoid last-minute rescue logic.
+
+In other words, the task should usually write important state continuously to durable storage, instead of relying on emergency file collection during a two-minute preemption window.
+
+#### `ResumePolicy`
+
+Describes how a task should recover after interruption.
+
+Suggested fields:
+
+- `mode`
+- `checkpoint_selector`
+- `max_resume_age`
+- `requeue_on_preemption`
+
+Typical modes:
+
+- `restart`
+- `resume`
+- `resume-if-possible`
+
+### Lifecycle-side objects
+
+#### `PreemptionPolicy`
+
+Describes what the runtime should do when a task is running on preemptible capacity.
+
+Suggested fields:
+
+- `tolerates_preemption`
+- `preferred_market`
+- `fallback_market`
+- `on_rebalance`
+- `on_interruption`
+- `max_preemptions`
+
+This policy answers questions such as:
+
+- may this task run on Spot at all
+- should the scheduler prefer Spot or avoid it
+- should the runtime checkpoint and requeue, or fail immediately
+- should the task be retried on Spot again, or escalated to On-Demand
+
+#### `DrainPolicy`
+
+Describes the sequence of actions during graceful shutdown of an at-risk worker.
+
+Suggested fields:
+
+- `stop_new_work`
+- `checkpoint_timeout_sec`
+- `flush_logs`
+- `upload_small_artifacts`
+- `graceful_exit`
+
+This object is intentionally separate from `CheckpointPolicy`.
+
+`CheckpointPolicy` describes what state matters.
+`DrainPolicy` describes the operational order in which shutdown should happen.
 
 ### Scheduler-side objects
 
@@ -180,6 +302,7 @@ Soft constraints that rank valid placements.
 Examples:
 
 - prefer hosts with `a100`
+- prefer `runpod` over other marketplace providers
 - avoid `shared`
 - prefer local or low-latency hosts
 - spread replicas across hosts
@@ -227,6 +350,29 @@ Examples:
 
 If a preference cannot be satisfied, the task should still run on the best remaining legal placement.
 
+## Spot and Other Preemptible Resources
+
+For EC2 Spot Instances and similar capacity, the language should not treat interruption as an afterthought.
+
+The preferred model is:
+
+1. provision preemptible capacity through a separate pool or provisioner
+2. register the resulting workers as runtime slots
+3. watch for rebalance and interruption signals
+4. drain the task
+5. checkpoint durable state
+6. requeue or resume elsewhere
+
+This is usually better than trying to "collect files back" only after the preemption notice arrives.
+
+The last-minute window is too small and too unreliable to be the primary durability mechanism.
+
+Instead, the language should assume:
+
+- important state is checkpointed continuously
+- small final artifacts may still be uploaded during drain
+- runtime recovery is primarily `checkpoint + requeue`, not emergency rsync
+
 ## Compilation Pipeline
 
 A future `SchedLang` compiler should look conceptually like this:
@@ -237,10 +383,12 @@ A future `SchedLang` compiler should look conceptually like this:
 4. Resolve reusable pools and defaults.
 5. Build candidate placements by matching task requirements against resource capabilities.
 6. Rank candidates using preference rules and host policies.
-7. Emit:
+7. Attach lifecycle and recovery metadata to each compiled task.
+8. Emit:
    - compiled `jobs.yaml`
    - optionally a derived `inventory.yaml`
    - optionally a placement plan or explanation report
+   - optionally a drain/recovery plan for preemptible tasks
 
 The current prototype implements only a smaller slice of this pipeline:
 
@@ -254,6 +402,7 @@ It does not yet implement:
 - requirement solving beyond basic filters
 - preference scoring
 - explanation output
+- preemption-aware recovery planning
 
 ## Mapping the Current Prototype
 
@@ -313,6 +462,18 @@ policy shared_half {
 }
 ```
 
+### Preemptible cloud pools
+
+```text
+pool aws_spot_train {
+  backend = "ec2-fleet"
+  market = "spot"
+  preemptible = true
+  allocation_strategy = "price-capacity-optimized"
+  rebalance_signal = true
+}
+```
+
 ### Task templates with explicit requirements and preferences
 
 ```text
@@ -333,6 +494,24 @@ experiment train_large {
 
   env {
     OMP_NUM_THREADS = "16"
+  }
+
+  checkpoint {
+    path = "s3://my-bucket/checkpoints/${task}"
+    interval = "5m"
+    on_rebalance = "save"
+    on_interruption = "save"
+  }
+
+  preemption {
+    tolerates_preemption = true
+    on_rebalance = "checkpoint-and-requeue"
+    on_interruption = "checkpoint-and-exit"
+  }
+
+  resume {
+    mode = "resume-if-possible"
+    requeue_on_preemption = true
   }
 
   run = """
@@ -359,6 +538,16 @@ experiment vlmlp_grid {
 
   prefers {
     placement = "spread"
+  }
+
+  checkpoint {
+    path = "s3://my-bucket/vlmlp/${dataset}/${pred_len}/${seed}"
+    interval = "10m"
+  }
+
+  resume {
+    mode = "resume"
+    requeue_on_preemption = true
   }
 
   run = """
@@ -393,7 +582,15 @@ If the language grows gradually, the next versions should probably come in this 
 - `explain` output for placement and rejection
 - richer pool composition
 
-### V3: global strategy profiles
+### V3: preemption-aware execution
+
+- `checkpoint { ... }`
+- `preemption { ... }`
+- `resume { ... }`
+- compile-time reports for `ready`, `unschedulable`, and `needs-multi-slot-runtime`
+- drain and recovery plans for Spot-like resources
+
+### V4: global strategy profiles
 
 - `strategy = "greedy" | "spread" | "pack" | "fair-share"`
 - reservation and anti-affinity
@@ -418,6 +615,14 @@ task vlmlp_ETTh2_96_s1 scheduled on sun-g2:
 - satisfies gpu_count >= 1
 - matches preferred tag txstate
 - moon is deprioritized by shared-host policy
+```
+
+```text
+task train_large on spot-worker-17 is draining:
+- pool market = spot
+- rebalance recommendation received
+- checkpoint path = s3://my-bucket/checkpoints/train_large
+- action = checkpoint-and-requeue
 ```
 
 Without explanations, a more expressive language quickly becomes difficult to trust.

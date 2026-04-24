@@ -39,6 +39,15 @@ def job_matches_slot(job: JobSpec, slot: SlotSpec) -> bool:
     if requirements.get("hosts"):
         if slot.host is None or slot.host not in {str(name) for name in requirements["hosts"]}:
             return False
+    if requirements.get("providers"):
+        if slot.provider is None or slot.provider not in {str(name) for name in requirements["providers"]}:
+            return False
+    if requirements.get("markets"):
+        if slot.market is None or slot.market not in {str(name) for name in requirements["markets"]}:
+            return False
+    if "preemptible" in requirements:
+        if bool(slot.preemptible) is not bool(requirements["preemptible"]):
+            return False
     gpu_count = requirements.get("gpu_count")
     if isinstance(gpu_count, int) and gpu_count > 1:
         # The current runtime launches at most one slot per job.

@@ -30,6 +30,14 @@ def _string_map(value: Any, label: str) -> dict[str, str]:
     return {str(key): str(item) for key, item in data.items()}
 
 
+def _optional_bool(value: Any, label: str) -> bool | None:
+    if value is None:
+        return None
+    if not isinstance(value, bool):
+        raise ValueError(f"{label} must be a boolean")
+    return value
+
+
 def _mapping(value: Any, label: str) -> dict[str, Any]:
     if value is None:
         return {}
@@ -103,6 +111,14 @@ def load_inventory(path: Path) -> tuple[InventoryDefaults, list[SlotSpec], dict[
         backend = _normalize_backend(slot_data.get("backend"), "slot.backend")
         host = slot_data.get("host")
         node = slot_data.get("node")
+        provider = str(slot_data["provider"]) if "provider" in slot_data else None
+        market = str(slot_data["market"]) if "market" in slot_data else None
+        preemptible = _optional_bool(slot_data.get("preemptible"), "slot.preemptible")
+        if preemptible is None:
+            preemptible = market == "spot"
+        rebalance_signal = _optional_bool(slot_data.get("rebalance_signal"), "slot.rebalance_signal")
+        if rebalance_signal is None:
+            rebalance_signal = bool(preemptible)
         if backend == "ssh" and not host:
             raise ValueError("ssh slots require host")
 
@@ -112,6 +128,11 @@ def load_inventory(path: Path) -> tuple[InventoryDefaults, list[SlotSpec], dict[
                 backend=backend,
                 host=str(host) if host is not None else None,
                 gpu=int(slot_data["gpu"]) if "gpu" in slot_data and slot_data["gpu"] is not None else None,
+                provider=provider,
+                market=market,
+                preemptible=bool(preemptible),
+                interruption_behavior=str(slot_data["interruption_behavior"]) if "interruption_behavior" in slot_data else None,
+                rebalance_signal=bool(rebalance_signal),
                 node=str(node) if node is not None else None,
                 workdir=str(slot_data["workdir"]) if "workdir" in slot_data else None,
                 run_root=str(slot_data["run_root"]) if "run_root" in slot_data else None,

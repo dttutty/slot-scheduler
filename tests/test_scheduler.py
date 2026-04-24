@@ -21,18 +21,39 @@ def test_job_matches_slot_filters_by_backend_and_tags() -> None:
 
 
 def test_job_matches_slot_honors_structured_requirements() -> None:
-    slot = SlotSpec(name="sun-g0", backend="ssh", host="sun", tags=("txstate", "a100"))
+    slot = SlotSpec(
+        name="sun-g0",
+        backend="ssh",
+        host="sun",
+        provider="runpod",
+        tags=("txstate", "a100"),
+        market="spot",
+        preemptible=True,
+    )
     job = JobSpec(
         name="demo",
         command=("echo", "hi"),
-        requirements={"hosts": ["sun"], "backends": ["ssh"], "required_tags": ["txstate"]},
+        requirements={
+            "hosts": ["sun"],
+            "backends": ["ssh"],
+            "providers": ["runpod"],
+            "required_tags": ["txstate"],
+            "markets": ["spot"],
+            "preemptible": True,
+        },
     )
     wrong_host = JobSpec(name="bad-host", command=("echo",), requirements={"hosts": ["moon"]})
     multi_gpu = JobSpec(name="big", command=("echo",), requirements={"gpu_count": 2})
+    wrong_provider = JobSpec(name="bad-provider", command=("echo",), requirements={"providers": ["vast"]})
+    wrong_market = JobSpec(name="wrong-market", command=("echo",), requirements={"markets": ["on-demand"]})
+    wrong_preemptible = JobSpec(name="wrong-preemptible", command=("echo",), requirements={"preemptible": False})
 
     assert job_matches_slot(job, slot) is True
     assert job_matches_slot(wrong_host, slot) is False
     assert job_matches_slot(multi_gpu, slot) is False
+    assert job_matches_slot(wrong_provider, slot) is False
+    assert job_matches_slot(wrong_market, slot) is False
+    assert job_matches_slot(wrong_preemptible, slot) is False
 
 
 def test_pop_next_compatible_job_rotates_queue() -> None:

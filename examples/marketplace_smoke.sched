@@ -1,0 +1,17 @@
+pool marketplace_spot {
+  requires {
+    backend = "ssh"
+    provider = ["runpod", "vast", "tensordock"]
+  }
+  prefers {
+    market = "spot"
+    placement = "spread"
+  }
+}
+
+experiment smoke_marketplace {
+  use_pool = "marketplace_spot"
+  command = """
+bash -lc "hostname && nvidia-smi -L && sleep 10"
+"""
+}

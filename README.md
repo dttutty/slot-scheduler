@@ -97,9 +97,11 @@ slot-scheduler/
 ├── examples/
 │   ├── demo.sched
 │   ├── inventory.leap2.yaml
+│   ├── inventory.marketplace-ssh.yaml
 │   ├── inventory.mixed.yaml
 │   ├── inventory.txstate-ssh.yaml
 │   ├── jobs.demo.yaml
+│   ├── marketplace_smoke.sched
 │   └── txstate_vlmlp.sched
 ├── src/slot_scheduler/
 │   ├── backends.py
@@ -141,6 +143,10 @@ slots:
     backend: ssh
     host: gpu2-001
     gpu: 0
+    provider: aws
+    market: spot
+    preemptible: true
+    rebalance_signal: true
     workdir: /var/tmp/sqp17/code/VLMLP
     run_root: /var/tmp/sqp17/slot-scheduler/runs
     tags: [ssh, spillover]
@@ -154,6 +160,22 @@ Supported host policy fields:
 - `max_active_fraction`: cap as a fraction of the host's declared slots
 
 For example, a 2-GPU host with `max_active_fraction: 0.5` will only run one slot at a time.
+
+Optional slot metadata for cloud-backed workers:
+
+- `provider`: infrastructure source such as `aws`, `runpod`, `vast`, `tensordock`, or `salad`
+- `market`: resource market such as `spot` or `on-demand`
+- `preemptible`: whether the worker can be reclaimed by the provider
+- `interruption_behavior`: provider-side interruption behavior metadata
+- `rebalance_signal`: whether early rebalance signals are expected
+
+These concepts are intentionally separate:
+
+- `backend` answers how the job is launched, such as `ssh`, `slurm`, or `local`
+- `provider` answers where the machine came from
+- `market` answers what kind of capacity it is, such as `spot` or `on-demand`
+
+A `provider` label does not create a new transport by itself. Marketplace-backed workers still need to be reachable through an existing backend such as `ssh`, `slurm`, or `local`.
 
 SSH aliases from `~/.ssh/config` work too. That is often the cleanest way to use per-host keys:
 
@@ -244,6 +266,8 @@ The current compiler also understands assignment-style `requires { ... }` and `p
 - `requires` are hard constraints; the subset already understood by the runtime is still compiled into legacy `backends`, `required_tags`, and `slots` fields.
 - `prefers` are soft constraints; they are preserved in the compiled YAML as structured metadata for future ranking and explainability work.
 - host-level constraints such as `requires { host = "sun" }` are also preserved and enforced by the current runtime
+- provider-level constraints such as `requires { provider = "runpod" }` are also preserved and enforced by the current runtime
+- market-level constraints such as `requires { market = "spot"; preemptible = true }` are also preserved and enforced
 - multi-GPU requirements such as `gpu_count = 4` are validated in the compile report, but still need a future multi-slot runtime
 
 Example:
@@ -310,16 +334,23 @@ uv run slot-scheduler run \
 Notes:
 
 - the DSL is intentionally small and experimental
-- strings should currently use Python-style literals, for example `"ssh"` or `["sun", "moon"]`
+- strings and lists should currently use Python-style literals, for example `"ssh"` or `["sun", "moon"]`
+- booleans accept both Python-style `True` / `False` and DSL-style `true` / `false`
 - multiline shell commands work best with triple-quoted strings
 - the compiled YAML remains the source of truth for the actual runtime behavior
 - today the runtime directly enforces `backends`, `required_tags`, `slots`, and host filters from `requirements`
+- provider filters from `requirements` are also enforced end-to-end
+- `market` and `preemptible` filters are also enforced end-to-end
 - `report.yaml` explains candidate slots and flags whether a job is `ready`, `unschedulable`, or currently `needs_multi_slot_runtime`
 
 The reference examples are:
 
 - [examples/demo.sched](examples/demo.sched)
+- [examples/marketplace_smoke.sched](examples/marketplace_smoke.sched)
+- [examples/spot_smoke.sched](examples/spot_smoke.sched)
 - [examples/txstate_vlmlp.sched](examples/txstate_vlmlp.sched)
+- [examples/inventory.ec2-mixed.yaml](examples/inventory.ec2-mixed.yaml)
+- [examples/inventory.marketplace-ssh.yaml](examples/inventory.marketplace-ssh.yaml)
 
 ## Watch Tool
 

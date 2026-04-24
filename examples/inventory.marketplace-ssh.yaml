@@ -1,0 +1,44 @@
+defaults:
+  poll_seconds: 20
+
+slots:
+  - name: vast-g0
+    backend: ssh
+    host: vast-box-01
+    provider: vast
+    market: on-demand
+    gpu: 0
+    workdir: /workspace/project
+    run_root: /workspace/slot-scheduler/runs
+    tags: [ssh, marketplace, vast]
+
+  - name: runpod-spot-g0
+    backend: ssh
+    host: runpod-box-01
+    provider: runpod
+    market: spot
+    preemptible: true
+    rebalance_signal: true
+    gpu: 0
+    workdir: /workspace/project
+    run_root: /workspace/slot-scheduler/runs
+    tags: [ssh, marketplace, runpod]
+
+  - name: tensordock-g0
+    backend: ssh
+    host: tensordock-box-01
+    provider: tensordock
+    market: on-demand
+    gpu: 0
+    workdir: /workspace/project
+    run_root: /workspace/slot-scheduler/runs
+    tags: [ssh, marketplace, tensordock]
+
+  - name: salad-edge-g0
+    backend: ssh
+    host: salad-edge-01
+    provider: salad
+    gpu: 0
+    workdir: /workspace/project
+    run_root: /workspace/slot-scheduler/runs
+    tags: [ssh, marketplace, edge, salad]

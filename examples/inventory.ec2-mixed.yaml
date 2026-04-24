@@ -1,0 +1,25 @@
+# Example inventory showing that Spot is modeled as resource metadata,
+# not as a new backend kind. These workers are still launched through SSH.
+defaults:
+  poll_seconds: 20
+
+slots:
+  - name: spot-g0
+    backend: ssh
+    host: ec2-spot-a
+    gpu: 0
+    market: spot
+    preemptible: true
+    interruption_behavior: terminate
+    rebalance_signal: true
+    run_root: /home/ubuntu/slot-scheduler/runs
+    tags: [aws, ec2, spot, gpu]
+
+  - name: ondemand-g0
+    backend: ssh
+    host: ec2-ondemand-a
+    gpu: 0
+    market: on-demand
+    preemptible: false
+    run_root: /home/ubuntu/slot-scheduler/runs
+    tags: [aws, ec2, ondemand, gpu]

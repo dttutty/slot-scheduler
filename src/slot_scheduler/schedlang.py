@@ -82,6 +82,13 @@ class _LineParser:
 
 
 def _parse_literal(raw: str, line_no: int) -> Any:
+    lowered = raw.strip()
+    if lowered == "true":
+        return True
+    if lowered == "false":
+        return False
+    if lowered == "null":
+        return None
     try:
         return ast.literal_eval(raw)
     except (SyntaxError, ValueError) as exc:
@@ -191,6 +198,12 @@ def _ensure_int(value: Any, label: str) -> int:
     return int(value)
 
 
+def _ensure_bool(value: Any, label: str) -> bool:
+    if not isinstance(value, bool):
+        raise ValueError(f"{label} must be a boolean")
+    return value
+
+
 def _ensure_string_mapping(value: Any, label: str) -> dict[str, str]:
     mapping = _ensure_mapping(value, label)
     return {str(key): str(item) for key, item in mapping.items()}
@@ -259,12 +272,15 @@ def _normalize_requirements(mapping: dict[str, Any], label: str) -> dict[str, An
     aliases = {
         "backend": "backends",
         "host": "hosts",
+        "provider": "providers",
+        "market": "markets",
         "slot": "slots",
         "host_tags": "required_tags",
         "tags": "required_tags",
     }
-    list_fields = {"backends", "hosts", "slots", "required_tags"}
+    list_fields = {"backends", "hosts", "providers", "markets", "slots", "required_tags"}
     int_fields = {"gpu_count", "gpu_mem_gb", "cpu_count", "ram_gb"}
+    bool_fields = {"preemptible"}
 
     normalized: dict[str, Any] = {}
     for raw_key, raw_value in mapping.items():
@@ -274,8 +290,10 @@ def _normalize_requirements(mapping: dict[str, Any], label: str) -> dict[str, An
             normalized[key] = _ensure_string_list_like(raw_value, field_label)
         elif key in int_fields:
             normalized[key] = _ensure_int(raw_value, field_label)
+        elif key in bool_fields:
+            normalized[key] = _ensure_bool(raw_value, field_label)
         else:
-            supported = sorted(list_fields | int_fields | set(aliases))
+            supported = sorted(list_fields | int_fields | bool_fields | set(aliases))
             raise ValueError(f"{label} has unsupported field {raw_key!r}; supported fields are {supported}")
     return normalized
 
@@ -284,11 +302,23 @@ def _normalize_preferences(mapping: dict[str, Any], label: str) -> dict[str, Any
     aliases = {
         "backend": "backends",
         "host": "hosts",
+        "provider": "providers",
+        "market": "markets",
         "slot": "slots",
         "tags": "host_tags",
     }
-    list_fields = {"backends", "hosts", "slots", "host_tags", "avoid_host_tags", "preferred_tags"}
+    list_fields = {
+        "backends",
+        "hosts",
+        "providers",
+        "markets",
+        "slots",
+        "host_tags",
+        "avoid_host_tags",
+        "preferred_tags",
+    }
     string_fields = {"placement"}
+    bool_fields = {"prefer_preemptible", "avoid_preemptible"}
 
     normalized: dict[str, Any] = {}
     for raw_key, raw_value in mapping.items():
@@ -298,8 +328,10 @@ def _normalize_preferences(mapping: dict[str, Any], label: str) -> dict[str, Any
             normalized[key] = _ensure_string_list_like(raw_value, field_label)
         elif key in string_fields:
             normalized[key] = str(raw_value)
+        elif key in bool_fields:
+            normalized[key] = _ensure_bool(raw_value, field_label)
         else:
-            supported = sorted(list_fields | string_fields | set(aliases))
+            supported = sorted(list_fields | string_fields | bool_fields | set(aliases))
             raise ValueError(f"{label} has unsupported field {raw_key!r}; supported fields are {supported}")
     return normalized
 
@@ -444,6 +476,11 @@ def _build_inventory_index(inventory: dict[str, Any]) -> dict[str, Any]:
             "host": host,
             "tags": tags,
             "gpu": gpu,
+            "provider": str(slot_mapping["provider"]) if "provider" in slot_mapping else None,
+            "market": str(slot_mapping["market"]) if "market" in slot_mapping else None,
+            "preemptible": bool(slot_mapping.get("preemptible", str(slot_mapping.get("market", "")).lower() == "spot")),
+            "interruption_behavior": str(slot_mapping["interruption_behavior"]) if "interruption_behavior" in slot_mapping else None,
+            "rebalance_signal": bool(slot_mapping.get("rebalance_signal", str(slot_mapping.get("market", "")).lower() == "spot")),
         }
         slots.append(slot_info)
 
@@ -454,6 +491,8 @@ def _build_inventory_index(inventory: dict[str, Any]) -> dict[str, Any]:
                 "slot_names": [],
                 "gpu_slot_names": [],
                 "backends": set(),
+                "providers": set(),
+                "markets": set(),
                 "tags": set(),
             },
         )
@@ -461,6 +500,10 @@ def _build_inventory_index(inventory: dict[str, Any]) -> dict[str, Any]:
         if gpu is not None:
             host_info["gpu_slot_names"].append(slot_name)
         host_info["backends"].add(backend)
+        if slot_info["provider"] is not None:
+            host_info["providers"].add(str(slot_info["provider"]))
+        if slot_info["market"] is not None:
+            host_info["markets"].add(str(slot_info["market"]))
         host_info["tags"].update(tags)
 
     normalized_hosts: list[dict[str, Any]] = []
@@ -473,6 +516,8 @@ def _build_inventory_index(inventory: dict[str, Any]) -> dict[str, Any]:
                 "slot_count": len(host_info["slot_names"]),
                 "gpu_slot_count": len(host_info["gpu_slot_names"]),
                 "backends": sorted(host_info["backends"]),
+                "providers": sorted(host_info["providers"]),
+                "markets": sorted(host_info["markets"]),
                 "tags": sorted(host_info["tags"]),
             }
         )
@@ -509,6 +554,23 @@ def _job_candidates_from_inventory(job: dict[str, Any], inventory: dict[str, Any
         candidates = [slot for slot in candidates if slot["host"] in allowed]
         notes.append(f"filtered to hosts: {sorted(allowed)}")
 
+    providers = requirements.get("providers") or []
+    if providers:
+        allowed = {str(provider) for provider in providers}
+        candidates = [slot for slot in candidates if slot["provider"] in allowed]
+        notes.append(f"filtered to providers: {sorted(allowed)}")
+
+    markets = requirements.get("markets") or []
+    if markets:
+        allowed = {str(market) for market in markets}
+        candidates = [slot for slot in candidates if slot["market"] in allowed]
+        notes.append(f"filtered to markets: {sorted(allowed)}")
+
+    if "preemptible" in requirements:
+        target = bool(requirements["preemptible"])
+        candidates = [slot for slot in candidates if bool(slot["preemptible"]) is target]
+        notes.append(f"filtered to preemptible={target}")
+
     return candidates, notes
 
 
@@ -530,6 +592,14 @@ def _preferred_slots_from_candidates(
             current = narrowed
             notes.append(f"preferred hosts matched: {sorted(allowed)}")
 
+    providers = preferences.get("providers") or []
+    if providers:
+        allowed = {str(provider) for provider in providers}
+        narrowed = [slot for slot in current if slot["provider"] in allowed]
+        if narrowed:
+            current = narrowed
+            notes.append(f"preferred providers matched: {sorted(allowed)}")
+
     backends = preferences.get("backends") or []
     if backends:
         allowed = {str(backend) for backend in backends}
@@ -537,6 +607,14 @@ def _preferred_slots_from_candidates(
         if narrowed:
             current = narrowed
             notes.append(f"preferred backends matched: {sorted(allowed)}")
+
+    markets = preferences.get("markets") or []
+    if markets:
+        allowed = {str(market) for market in markets}
+        narrowed = [slot for slot in current if slot["market"] in allowed]
+        if narrowed:
+            current = narrowed
+            notes.append(f"preferred markets matched: {sorted(allowed)}")
 
     preferred_tags = preferences.get("host_tags") or preferences.get("preferred_tags") or []
     if preferred_tags:
@@ -546,6 +624,12 @@ def _preferred_slots_from_candidates(
             current = narrowed
             notes.append(f"preferred host tags matched: {sorted(allowed)}")
 
+    if preferences.get("prefer_preemptible") is True:
+        narrowed = [slot for slot in current if bool(slot["preemptible"]) is True]
+        if narrowed:
+            current = narrowed
+            notes.append("preferred preemptible slots when possible")
+
     avoid_host_tags = preferences.get("avoid_host_tags") or []
     if avoid_host_tags:
         blocked = {str(tag) for tag in avoid_host_tags}
@@ -553,6 +637,12 @@ def _preferred_slots_from_candidates(
         if narrowed:
             current = narrowed
             notes.append(f"avoided host tags when possible: {sorted(blocked)}")
+
+    if preferences.get("avoid_preemptible") is True:
+        narrowed = [slot for slot in current if bool(slot["preemptible"]) is False]
+        if narrowed:
+            current = narrowed
+            notes.append("avoided preemptible slots when possible")
 
     return current, notes
 

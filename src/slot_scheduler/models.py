@@ -28,6 +28,11 @@ class SlotSpec:
     backend: BackendKind
     host: str | None = None
     gpu: int | None = None
+    provider: str | None = None
+    market: str | None = None
+    preemptible: bool = False
+    interruption_behavior: str | None = None
+    rebalance_signal: bool = False
     node: str | None = None
     workdir: str | None = None
     run_root: str | None = None
