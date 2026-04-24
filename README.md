@@ -95,10 +95,12 @@ slot-scheduler/
 │   ├── watch_inventory
 │   └── watch_inventory.py
 ├── examples/
+│   ├── demo.sched
 │   ├── inventory.leap2.yaml
 │   ├── inventory.mixed.yaml
 │   ├── inventory.txstate-ssh.yaml
-│   └── jobs.demo.yaml
+│   ├── jobs.demo.yaml
+│   └── txstate_vlmlp.sched
 ├── src/slot_scheduler/
 │   ├── backends.py
 │   ├── cli.py
@@ -218,6 +220,82 @@ uv run slot-scheduler run \
 ```
 
 If your SSH hosts already use key-based login through `~/.ssh/config`, no password environment variable is required.
+
+## SchedLang
+
+`slot-scheduler` now includes an experimental DSL prototype for expressing scheduling intent at a higher level.
+
+The goal is not to replace the current YAML runtime. Instead, the DSL acts as a front-end that compiles down to the existing `jobs.yaml`, and can optionally materialize host policies into a derived inventory file.
+
+Today the DSL supports four main ideas:
+
+- `pool`: reusable scheduling constraints such as `backends`, `required_tags`, or explicit `slots`
+- `policy`: host-level limits such as `max_active_slots` or `max_active_fraction`
+- `experiment`: a named experiment template
+- `matrix`: cartesian expansion over experiment variables
+
+Example:
+
+```text
+pool txstate_ssh {
+  backends = ["ssh"]
+  required_tags = ["txstate"]
+}
+
+policy shared_half {
+  hosts = ["sun", "moon"]
+  max_active_fraction = 0.5
+}
+
+experiment vlmlp_followup {
+  use_pool = "txstate_ssh"
+  matrix {
+    dataset = ["ETTh2", "ETTm2"]
+    pred_len = [96, 192, 336, 720]
+    seed = [1, 2]
+  }
+  env {
+    OMP_NUM_THREADS = "8"
+    MKL_NUM_THREADS = "8"
+  }
+  retries = 1
+  name_template = "vlmlp_${dataset}_pl${pred_len}_s${seed}"
+  command = """
+bash -lc "cd /home/sqp17/Projects/VLMLP && uv run python run_experiment.py ${dataset} ${pred_len} --seed ${seed}"
+"""
+}
+```
+
+Compile it into the current YAML runtime:
+
+```bash
+uv run slot-scheduler compile \
+  --dsl examples/txstate_vlmlp.sched \
+  --inventory-in examples/inventory.txstate-ssh.yaml \
+  --inventory-out .runs/compiled-demo/inventory.yaml \
+  --jobs-out .runs/compiled-demo/jobs.yaml
+```
+
+Then run the scheduler exactly as before:
+
+```bash
+uv run slot-scheduler run \
+  --inventory .runs/compiled-demo/inventory.yaml \
+  --jobs .runs/compiled-demo/jobs.yaml \
+  --run-dir .runs/txstate-vlmlp
+```
+
+Notes:
+
+- the DSL is intentionally small and experimental
+- strings should currently use Python-style literals, for example `"ssh"` or `["sun", "moon"]`
+- multiline shell commands work best with triple-quoted strings
+- the compiled YAML remains the source of truth for the actual runtime behavior
+
+The reference examples are:
+
+- [examples/demo.sched](examples/demo.sched)
+- [examples/txstate_vlmlp.sched](examples/txstate_vlmlp.sched)
 
 ## Watch Tool
 

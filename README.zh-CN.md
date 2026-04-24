@@ -102,10 +102,12 @@ slot-scheduler/
 │   ├── watch_inventory
 │   └── watch_inventory.py
 ├── examples/
+│   ├── demo.sched
 │   ├── inventory.leap2.yaml
 │   ├── inventory.mixed.yaml
 │   ├── inventory.txstate-ssh.yaml
-│   └── jobs.demo.yaml
+│   ├── jobs.demo.yaml
+│   └── txstate_vlmlp.sched
 ├── src/slot_scheduler/
 │   ├── backends.py
 │   ├── cli.py
@@ -225,6 +227,82 @@ uv run slot-scheduler run \
 ```
 
 如果你的 SSH 机器已经通过 `~/.ssh/config` 和 key-based login 打通了，就不需要额外配置密码环境变量。
+
+## SchedLang
+
+`slot-scheduler` 现在还带了一个实验性的 DSL 原型，用来更高层地表达调度意图。
+
+它的目标不是替代现有 YAML runtime，而是作为一个前端，把更抽象的语言编译成现有的 `jobs.yaml`，并在需要时把 host policy 一起落到派生 inventory 文件里。
+
+当前这个 DSL 先支持四个核心概念：
+
+- `pool`：可复用的调度约束，比如 `backends`、`required_tags`、显式 `slots`
+- `policy`：主机级策略，比如 `max_active_slots`、`max_active_fraction`
+- `experiment`：命名实验模板
+- `matrix`：实验变量的笛卡尔展开
+
+示例：
+
+```text
+pool txstate_ssh {
+  backends = ["ssh"]
+  required_tags = ["txstate"]
+}
+
+policy shared_half {
+  hosts = ["sun", "moon"]
+  max_active_fraction = 0.5
+}
+
+experiment vlmlp_followup {
+  use_pool = "txstate_ssh"
+  matrix {
+    dataset = ["ETTh2", "ETTm2"]
+    pred_len = [96, 192, 336, 720]
+    seed = [1, 2]
+  }
+  env {
+    OMP_NUM_THREADS = "8"
+    MKL_NUM_THREADS = "8"
+  }
+  retries = 1
+  name_template = "vlmlp_${dataset}_pl${pred_len}_s${seed}"
+  command = """
+bash -lc "cd /home/sqp17/Projects/VLMLP && uv run python run_experiment.py ${dataset} ${pred_len} --seed ${seed}"
+"""
+}
+```
+
+把它编译成现有 YAML runtime：
+
+```bash
+uv run slot-scheduler compile \
+  --dsl examples/txstate_vlmlp.sched \
+  --inventory-in examples/inventory.txstate-ssh.yaml \
+  --inventory-out .runs/compiled-demo/inventory.yaml \
+  --jobs-out .runs/compiled-demo/jobs.yaml
+```
+
+然后像平常一样运行 scheduler：
+
+```bash
+uv run slot-scheduler run \
+  --inventory .runs/compiled-demo/inventory.yaml \
+  --jobs .runs/compiled-demo/jobs.yaml \
+  --run-dir .runs/txstate-vlmlp
+```
+
+几点说明：
+
+- 这个 DSL 目前是刻意做小、并且明确是实验性的
+- 现在字符串字面量还是用 Python 风格，比如 `"ssh"`、`["sun", "moon"]`
+- 多行 shell 命令最适合放在三引号字符串里
+- 实际 runtime 的最终事实来源，仍然是编译出来的 YAML
+
+参考例子在这里：
+
+- [examples/demo.sched](examples/demo.sched)
+- [examples/txstate_vlmlp.sched](examples/txstate_vlmlp.sched)
 
 ## 观察工具
 

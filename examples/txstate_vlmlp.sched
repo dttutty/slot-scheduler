@@ -1,0 +1,27 @@
+pool txstate_ssh {
+  backends = ["ssh"]
+  required_tags = ["txstate"]
+}
+
+policy shared_half {
+  hosts = ["sun", "moon"]
+  max_active_fraction = 0.5
+}
+
+experiment vlmlp_followup {
+  use_pool = "txstate_ssh"
+  matrix {
+    dataset = ["ETTh2", "ETTm2"]
+    pred_len = [96, 192, 336, 720]
+    seed = [1, 2]
+  }
+  env {
+    OMP_NUM_THREADS = "8"
+    MKL_NUM_THREADS = "8"
+  }
+  retries = 1
+  name_template = "vlmlp_${dataset}_pl${pred_len}_s${seed}"
+  command = """
+bash -lc "cd /home/sqp17/Projects/VLMLP && uv run python run_experiment.py ${dataset} ${pred_len} --seed ${seed}"
+"""
+}

@@ -1,0 +1,92 @@
+from __future__ import annotations
+
+from pathlib import Path
+
+import yaml
+
+from slot_scheduler.schedlang import (
+    compile_inventory_document,
+    compile_jobs_document,
+    load_schedlang,
+    parse_schedlang,
+    write_yaml,
+)
+
+
+def test_parse_and_compile_schedlang_jobs() -> None:
+    document = parse_schedlang(
+        '''
+pool ssh_demo {
+  backends = ["ssh"]
+  required_tags = ["txstate"]
+}
+
+experiment smoke {
+  use_pool = "ssh_demo"
+  matrix {
+    dataset = ["ETTh2", "ETTm2"]
+    pred_len = [96, 192]
+  }
+  env {
+    OMP_NUM_THREADS = "8"
+  }
+  retries = 1
+  name_template = "job_${dataset}_${pred_len}"
+  command = """
+bash -lc "python run.py ${dataset} ${pred_len}"
+"""
+}
+        '''.strip()
+    )
+
+    payload = compile_jobs_document(document)
+    jobs = payload["jobs"]
+
+    assert len(jobs) == 4
+    assert jobs[0]["name"] == "job_ETTh2_96"
+    assert jobs[0]["backends"] == ["ssh"]
+    assert jobs[0]["required_tags"] == ["txstate"]
+    assert jobs[0]["env"]["OMP_NUM_THREADS"] == "8"
+    assert jobs[0]["command"] == 'bash -lc "python run.py ETTh2 96"'
+    assert jobs[0]["retries"] == 1
+
+
+def test_compile_schedlang_inventory_overlay() -> None:
+    document = parse_schedlang(
+        """
+policy shared_half {
+  hosts = ["sun", "moon"]
+  max_active_fraction = 0.5
+}
+        """.strip()
+    )
+    base_inventory = {"defaults": {"poll_seconds": 20}, "host_policies": [{"host": "gauss", "max_active_slots": 1}]}
+
+    compiled = compile_inventory_document(document, base_inventory)
+
+    assert compiled["host_policies"] == [
+        {"host": "gauss", "max_active_slots": 1},
+        {"host": "sun", "max_active_fraction": 0.5},
+        {"host": "moon", "max_active_fraction": 0.5},
+    ]
+
+
+def test_load_schedlang_and_write_yaml(tmp_path: Path) -> None:
+    dsl_path = tmp_path / "example.sched"
+    jobs_out = tmp_path / "compiled" / "jobs.yaml"
+    dsl_path.write_text(
+        """
+experiment one {
+  command = "echo hello"
+}
+        """.strip()
+        + "\n",
+        encoding="utf-8",
+    )
+
+    document = load_schedlang(dsl_path)
+    payload = compile_jobs_document(document)
+    write_yaml(jobs_out, payload)
+
+    written = yaml.safe_load(jobs_out.read_text(encoding="utf-8"))
+    assert written == {"jobs": [{"name": "one", "command": "echo hello"}]}

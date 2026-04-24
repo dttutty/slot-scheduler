@@ -1,0 +1,20 @@
+pool ssh_demo {
+  backends = ["ssh"]
+  required_tags = ["txstate"]
+}
+
+experiment ssh_smoke {
+  use_pool = "ssh_demo"
+  matrix {
+    host_label = ["alpha", "beta"]
+    wait_sec = [1, 2]
+  }
+  env {
+    OMP_NUM_THREADS = "8"
+    MKL_NUM_THREADS = "8"
+  }
+  retries = 1
+  command = """
+bash -lc "echo ${host_label} && hostname && sleep ${wait_sec}"
+"""
+}
